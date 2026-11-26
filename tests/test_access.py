@@ -316,7 +316,7 @@ async def test_lock_state_follows_door(hass: HomeAssistant, entry, ws, users, fa
     await hass.async_block_till_done()
     assert hass.states.get("lock.front_door").state == "unlocked"
 
-    async_fire_time_changed(hass, dt_util.utcnow() + timedelta(seconds=11))
+    async_fire_time_changed(hass, dt_util.utcnow() + timedelta(seconds=6))
     await hass.async_block_till_done()
     assert hass.states.get("lock.front_door").state == "locked"  # relocked by itself
 
