@@ -1,0 +1,81 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>HIVEBIT Access card preview</title>
+<style>
+  body { margin: 0; background: #000; font-family: Roboto, "Segoe UI", Arial, sans-serif; padding: 12px; }
+</style>
+<script>
+  // Stub for HA's <ha-icon>: a small outlined square, enough to judge layout.
+  customElements.define("ha-icon", class extends HTMLElement {
+    connectedCallback() {
+      const size = getComputedStyle(this).getPropertyValue("--mdc-icon-size").trim() || "20px";
+      this.style.cssText += `;width:${size};height:${size};display:inline-block;flex:none;border:1.5px solid currentColor;border-radius:30%;opacity:.7;box-sizing:border-box`;
+    }
+  });
+</script>
+<script src="../../custom_components/hivebit_locks_access/frontend/hivebit-access-card.js"></script>
+</head>
+<body>
+<hivebit-access-card id="card"></hivebit-access-card>
+<script>
+  const now = Date.now() / 1000;
+  const ROLE = new URLSearchParams(location.search).get("role") || "owner";
+  const people = {
+    people: [
+      { id: "p1", name: "Abdullah", role: "owner", has_app: true, ha_user_id: "u1", expires_at: null, notify_on_arrival: false,
+        credentials: [{ id: "c1", method: "fingerprint", lock_ref: 11, status: "active" }, { id: "c2", method: "pin", lock_ref: 12, status: "active" }] },
+      { id: "p2", name: "Sara", role: "family", has_app: true, ha_user_id: "u2", expires_at: null, notify_on_arrival: true,
+        credentials: [{ id: "c3", method: "fingerprint", lock_ref: 14, status: "active" }] },
+      { id: "p3", name: "Kwame (driver)", role: "household", has_app: false, ha_user_id: null, expires_at: now + 86400 * 14, notify_on_arrival: false,
+        credentials: [{ id: "c4", method: "card", lock_ref: 3, status: "active" }, { id: "c5", method: "fingerprint", lock_ref: 15, status: "removing" }] },
+      { id: "p4", name: "Ama", role: "household", has_app: false, ha_user_id: null, expires_at: null, notify_on_arrival: false, credentials: [] },
+    ],
+    unknown: [{ id: "c9", method: "fingerprint", lock_ref: 21, status: "unknown" }],
+    tablet_user_ids: ["u5"],
+    session: null,
+  };
+  const timeline = [
+    { seq: 9, ts: now - 120, kind: "unlock", method: "fingerprint", text: "Sara opened with fingerprint", person_id: "p2" },
+    { seq: 8, ts: now - 900, kind: "unlock", method: "fingerprint", text: "Unknown fingerprint #21 opened the door", needs_name: true, credential_id: "c9" },
+    { seq: 7, ts: now - 3600, kind: "unlock", method: "guest_code", text: "Guest 'Plumber' used code" },
+    { seq: 6, ts: now - 7200, kind: "unlock", method: "app", text: "Unlocked remotely by Abdullah", person_id: "p1" },
+    { seq: 5, ts: now - 8000, kind: "door", text: "Door opened" },
+    { seq: 4, ts: now - 9000, kind: "admin", text: "Abdullah added card #3 for Kwame (driver)" },
+  ];
+  const codes = [
+    { slot: 901, name: "Plumber", pin: "482913", kind: "one_time", start: now - 600, end: now + 80000, weekdays: [], daily_from: null, daily_to: null },
+    { slot: 902, name: "Cleaner", pin: "730264", kind: "weekly", start: now, end: now + 86400 * 30, weekdays: [0, 3], daily_from: [9, 0], daily_to: [12, 0] },
+  ];
+  const users = [
+    { id: "u1", name: "Abdullah", linked: true, tablet: false }, { id: "u2", name: "Sara", linked: true, tablet: false },
+    { id: "u3", name: "Omar", linked: false, tablet: false }, { id: "u5", name: "Hallway tablet", linked: false, tablet: true },
+  ];
+  const lock = { entry_id: "e1", name: "Front door", available: true, door_open: false, locked: true, battery: 92, role: ROLE,
+    capabilities: { enrol_methods: ["card", "fingerprint", "pin"], remote_unlock: true, guest_codes: true } };
+  window.pushers = [];
+  const hass = {
+    callWS: async (m) => {
+      const t = m.type.split("/")[1] + (m.type.split("/")[2] ? "/" + m.type.split("/")[2] : "");
+      switch (t) {
+        case "locks": return { locks: [lock] };
+        case "people": return people;
+        case "guest_codes": return { guest_codes: codes };
+        case "timeline": return { entries: timeline };
+        case "ha_users": return { users };
+        case "unlock": return { ok: true };
+        case "enrol/start": return { session: { person_id: m.person_id, method: m.method, state: "waiting", presses_needed: 0, presses_done: 0 } };
+        case "guest_code/create": return { slot: 903, name: m.name, pin: "519027", kind: m.kind, start: now, end: m.end || now + 86400, weekdays: m.weekdays || [] };
+        default: return { ok: true };
+      }
+    },
+    connection: { subscribeMessage: async (cb) => { window.pushers.push(cb); return () => {}; } },
+  };
+  const card = document.getElementById("card");
+  card.setConfig({ view: new URLSearchParams(location.search).get("view") || undefined });
+  card.hass = hass;
+</script>
+</body>
+</html>
