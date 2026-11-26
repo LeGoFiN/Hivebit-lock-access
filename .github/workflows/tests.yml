@@ -1,0 +1,15 @@
+name: tests
+on:
+  push:
+  pull_request:
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: pip install pytest-homeassistant-custom-component==0.13.316 tinytuya==1.21.1 ruff
+      - run: ruff check --select F,E9,B --ignore B008 custom_components tools tests
+      - run: pytest -q

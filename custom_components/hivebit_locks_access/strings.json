@@ -1,0 +1,34 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Add a lock",
+        "description": "Values for the gateway and the lock are in LocalTuya's config entry, or in the Tuya IoT platform. The local key stays on this Home Assistant.",
+        "data": {
+          "name": "Door name",
+          "profile": "Lock model",
+          "host": "Gateway IP address",
+          "gateway_id": "Gateway device ID",
+          "local_key": "Gateway local key",
+          "protocol_version": "Gateway protocol version",
+          "device_id": "Lock device ID",
+          "node_id": "Lock node ID (cid)",
+          "unlock_key_id": "Remote unlock key ID",
+          "unlock_key": "Remote unlock key (8 characters)",
+          "owner_user_id": "First authorized person (Home Assistant account)"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Could not reach the lock through the gateway. Check the IP address, IDs, local key and protocol version.",
+      "unlock_key_length": "The remote unlock key is 8 characters."
+    },
+    "abort": {
+      "already_configured": "This lock is already set up."
+    }
+  },
+  "entity": {
+    "lock": {"door_lock": {"name": "Door"}},
+    "binary_sensor": {"door": {"name": "Door contact"}}
+  }
+}
