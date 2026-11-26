@@ -9,5 +9,5 @@
   "iot_class": "local_push",
   "issue_tracker": "https://github.com/LeGoFiN/hivebit-lock-access/issues",
   "requirements": ["tinytuya==1.21.1"],
-  "version": "0.1.0"
+  "version": "0.1.1"
 }

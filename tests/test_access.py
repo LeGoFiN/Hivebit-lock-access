@@ -298,3 +298,33 @@ async def test_only_one_enrolment_at_a_time(hass: HomeAssistant, entry, ws, user
     res = await father.call("enrol/cancel")
     assert res["success"] and res["result"]["session"]["state"] == "cancelled"
     assert base64.b64decode(fake.sent[-1].value)[1] == 0xFE
+
+
+async def test_lock_state_follows_door(hass: HomeAssistant, entry, ws, users, fake) -> None:
+    """MOES: DP 57 is meaningless; closed door = locked, unlock = briefly unlocked."""
+    from datetime import timedelta
+
+    from homeassistant.util import dt as dt_util
+    from pytest_homeassistant_custom_component.common import async_fire_time_changed
+
+    fake.report(57, True, snapshot=True)
+    fake.report(47, "closed", snapshot=True)
+    await hass.async_block_till_done()
+    assert hass.states.get("lock.front_door").state == "locked"
+
+    fake.report(1, 11)  # fingerprint opens the bolt, door still closed
+    await hass.async_block_till_done()
+    assert hass.states.get("lock.front_door").state == "unlocked"
+
+    async_fire_time_changed(hass, dt_util.utcnow() + timedelta(seconds=11))
+    await hass.async_block_till_done()
+    assert hass.states.get("lock.front_door").state == "locked"  # relocked by itself
+
+    fake.report(1, 11)
+    fake.report(47, "open")
+    await hass.async_block_till_done()
+    assert hass.states.get("lock.front_door").state == "unlocked"
+    fake.report(57, True)  # ignored
+    fake.report(47, "closed")
+    await hass.async_block_till_done()
+    assert hass.states.get("lock.front_door").state == "locked"
