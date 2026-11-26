@@ -6,7 +6,7 @@ create guest codes and read the timeline. Every rule is enforced server-side,
 so a hidden dashboard, a long-lived token or an AI assistant connected to a
 non-owner account cannot get around it.
 
-Status: **Phase 1 – backend** (no dashboard card yet). Spec: *HIVEBIT Access
+Status: **Phase 2 – dashboard card** (backend from Phase 1 is on `main`). Spec: *HIVEBIT Access
 Layer – Specification v0.2* (Claude doc).
 
 ## What it does
@@ -25,6 +25,31 @@ Layer – Specification v0.2* (Claude doc).
 There are **no HA services** for these actions. The dashboard talks to the
 WebSocket commands under `hivebit_locks_access/…`, and each one checks the
 caller's role. Automations and scripts have no user, so they are refused.
+
+## Dashboard card
+
+The integration serves its own card and loads it on every dashboard, so there
+is no resource to add. In a dashboard: *Add card → Manual*:
+
+```yaml
+type: custom:hivebit-access-card
+# entry_id: <lock>      # optional, defaults to the first lock you have a role on
+# view: tablet          # optional: big status + one Unlock button (wall tablets)
+```
+
+The view follows the logged-in user's role, decided by the server:
+
+| Role | What the card shows |
+| --- | --- |
+| Authorized person | Door (hold to unlock, recent activity), People (add person, enrol fingerprint / card / PIN with live progress, name unknown credentials, wall tablets), Guest codes (one-time, dates, weekly; share in English + Arabic), Timeline |
+| Family (app account) | Door status and hold to unlock |
+| Wall tablet | Door status and one large Unlock button |
+
+English by default; the header switch flips to Arabic (right-to-left). Timeline
+sentences come from the server and are English for now.
+
+`tools/card_preview/` renders the card against a mock backend in headless
+Chrome (`python tools/card_preview/shots.py /tmp/shots`) for layout checks.
 
 ## Supported locks
 

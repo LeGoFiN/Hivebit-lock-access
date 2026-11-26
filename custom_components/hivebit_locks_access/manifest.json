@@ -1,13 +1,23 @@
 {
   "domain": "hivebit_locks_access",
   "name": "HIVEBIT Locks Access",
-  "codeowners": ["@LeGoFiN"],
+  "after_dependencies": [
+    "frontend",
+    "http"
+  ],
+  "codeowners": [
+    "@LeGoFiN"
+  ],
   "config_flow": true,
-  "dependencies": ["websocket_api"],
+  "dependencies": [
+    "websocket_api"
+  ],
   "documentation": "https://github.com/LeGoFiN/hivebit-lock-access",
   "integration_type": "device",
   "iot_class": "local_push",
   "issue_tracker": "https://github.com/LeGoFiN/hivebit-lock-access/issues",
-  "requirements": ["tinytuya==1.21.1"],
-  "version": "0.1.2"
+  "requirements": [
+    "tinytuya==1.21.1"
+  ],
+  "version": "0.2.0"
 }

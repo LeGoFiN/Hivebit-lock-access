@@ -11,6 +11,7 @@ from homeassistant.const import CONF_NAME, Platform
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.typing import ConfigType
+from homeassistant.setup import async_when_setup
 
 from . import transport_factory
 from .const import (
@@ -19,6 +20,7 @@ from .const import (
     CONF_UNLOCK_KEY,
     CONF_UNLOCK_KEY_ID,
     DOMAIN,
+    VERSION,
 )
 from .eventlog import EventLog
 from .lockcore.profiles import get_profile
@@ -34,8 +36,28 @@ PLATFORMS = [Platform.LOCK, Platform.BINARY_SENSOR, Platform.SENSOR]
 type AccessConfigEntry = ConfigEntry[AccessManager]
 
 
+CARD_URL = f"/{DOMAIN}/hivebit-access-card.js"
+CARD_PATH = Path(__file__).parent / "frontend" / "hivebit-access-card.js"
+
+
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     async_register(hass)
+
+    async def _serve_card(hass: HomeAssistant, _component: str) -> None:
+        from homeassistant.components.http import StaticPathConfig
+
+        await hass.http.async_register_static_paths(
+            [StaticPathConfig(CARD_URL, str(CARD_PATH), cache_headers=False)]
+        )
+
+    async def _load_card(hass: HomeAssistant, _component: str) -> None:
+        from homeassistant.components.frontend import add_extra_js_url
+
+        # Loaded on every dashboard, so the card needs no manual resource entry.
+        add_extra_js_url(hass, f"{CARD_URL}?v={VERSION}")
+
+    async_when_setup(hass, "http", _serve_card)
+    async_when_setup(hass, "frontend", _load_card)
     return True
 
 
