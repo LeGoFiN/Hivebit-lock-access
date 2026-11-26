@@ -305,6 +305,8 @@ class TuyaResidentialLockProfile(LockProfile):
                 return [RawReport(dp, value)]
             return [RemoteUnlockResult(success=data[0] == 0x00)]
         if dp == self.DP_LOCK_STATE:
+            if self.lock_state_from_door:
+                return []
             locked = bool(value) == self.LOCK_STATE_TRUE_MEANS_LOCKED
             return [LockStateReport(is_locked=locked)]
         if dp == self.DP_ENROL:

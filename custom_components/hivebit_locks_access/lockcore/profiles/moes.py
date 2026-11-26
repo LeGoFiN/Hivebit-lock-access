@@ -7,6 +7,8 @@ Uses the Tuya standard data points unchanged. Bench notes (Nov 2026):
 * Temporary-password times are read as unsigned (end dates up to 2099 work).
 * Tuya app slots count down from 999; HA uses 901-949.
 * The lock does not buffer unlock reports while the gateway is down.
+* DP 57 (lock motor state) stays "on" whatever the bolt does, so the lock
+  state follows the door contact instead: closed = locked (26 Nov bench).
 """
 
 from __future__ import annotations
@@ -20,3 +22,5 @@ class MoesWdlX1ZigbeeProfile(TuyaResidentialLockProfile):
     profile_id = "moes_wdl_x1_zigbee"
     name = "MOES WDL-X1 (Zigbee)"
     product_ids = ("bfejtdig",)
+    lock_state_from_door = True
+    auto_relock_s = 10

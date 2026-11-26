@@ -79,6 +79,12 @@ class LockProfile(ABC):
     name: str = ""
     #: Vendor product IDs (e.g. Tuya PIDs) this profile is known to fit.
     product_ids: tuple[str, ...] = ()
+    #: True when the lock reports no usable bolt state, so "locked" follows the
+    #: door: closed = locked (mortise locks that latch on close).
+    lock_state_from_door: bool = False
+    #: Seconds after an unlock with the door still closed before the lock
+    #: relocks itself. Used only with ``lock_state_from_door``.
+    auto_relock_s: int = 10
 
     @property
     @abstractmethod

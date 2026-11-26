@@ -140,6 +140,7 @@ class AccessManager:
         self._guest_timers: dict[int, CALLBACK_TYPE] = {}
         self._person_timers: dict[str, CALLBACK_TYPE] = {}
         self._session_timer: CALLBACK_TYPE | None = None
+        self._relock_timer: CALLBACK_TYPE | None = None
         self._handle_lock = asyncio.Lock()
         self._was_available = False
         self._stopping = False
@@ -173,6 +174,7 @@ class AccessManager:
         if self._session_timer:
             self._session_timer()
             self._session_timer = None
+        self._cancel_relock()
         await self.transport.async_stop()
 
     @property
@@ -241,6 +243,9 @@ class AccessManager:
         if isinstance(report, DoorReport):
             previous = self.door_open
             self.door_open = report.is_open
+            if self.profile.lock_state_from_door:
+                self._cancel_relock()
+                self.locked = not report.is_open
             if not snapshot and previous is not None and previous != report.is_open:
                 await self._record("door", {"open": report.is_open})
             self._notify("state", self.state_dict())
@@ -253,6 +258,7 @@ class AccessManager:
         elif snapshot:
             return  # a status poll's last-unlock IDs are not new events
         elif isinstance(report, UnlockReport):
+            self._mark_unlocked()
             if report.method is Method.GUEST_CODE:
                 await self._guest_used(report.lock_ref)
             else:
@@ -261,7 +267,9 @@ class AccessManager:
             alert = "urgent" if report.kind in URGENT_ALARMS else "normal"
             await self._record("alarm", {"alarm": report.kind}, alert=alert)
         elif isinstance(report, RemoteUnlockResult):
-            if not report.success:
+            if report.success:
+                self._mark_unlocked()
+            else:
                 await self._record("unlock_failed", {}, alert="normal")
         elif isinstance(report, EnrolReport):
             await self._enrol_report(report)
@@ -291,6 +299,7 @@ class AccessManager:
         )
         method = Method.TABLET if caller is Caller.TABLET else Method.APP
         person = self.policy.person_for(user_id)
+        self._mark_unlocked()
         async with self._handle_lock:
             await self._record(
                 "unlock",
@@ -301,6 +310,32 @@ class AccessManager:
                 },
                 person_id=person.id if person else None,
             )
+
+    @callback
+    def _mark_unlocked(self) -> None:
+        """For locks whose state follows the door: unlocked until the door
+        opens and closes again, or until the lock relocks on its own."""
+        if not self.profile.lock_state_from_door or self.door_open:
+            return
+        self.locked = False
+        self._cancel_relock()
+
+        @callback
+        def _relock(_now: Any) -> None:
+            self._relock_timer = None
+            if not self.door_open:
+                self.locked = True
+                self._notify("state", self.state_dict())
+
+        self._relock_timer = async_track_point_in_utc_time(
+            self.hass, _relock, dt_util.utcnow() + timedelta(seconds=self.profile.auto_relock_s)
+        )
+        self._notify("state", self.state_dict())
+
+    def _cancel_relock(self) -> None:
+        if self._relock_timer:
+            self._relock_timer()
+            self._relock_timer = None
 
     async def _user_name(self, user_id: str | None) -> str:
         person = self.store.person_by_user(user_id)
