@@ -23,4 +23,4 @@ class MoesWdlX1ZigbeeProfile(TuyaResidentialLockProfile):
     name = "MOES WDL-X1 (Zigbee)"
     product_ids = ("bfejtdig",)
     lock_state_from_door = True
-    auto_relock_s = 10
+    auto_relock_s = 5  # measured on the bench, 26 Nov
