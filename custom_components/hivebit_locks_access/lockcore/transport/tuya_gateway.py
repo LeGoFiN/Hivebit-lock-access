@@ -111,6 +111,7 @@ class TuyaGatewayTransport(Transport):
                     self._device_id, cid=self._node_id, parent=gateway
                 )
                 status = lock.status()
+                _LOGGER.debug("<- status %s", status)
                 self._check(status)
                 self._call_soon(self._set_available, True)
                 backoff = 2.0
@@ -139,6 +140,7 @@ class TuyaGatewayTransport(Transport):
                     write, fut = self._outbox.get_nowait()
                 except queue.Empty:
                     break
+                _LOGGER.debug("-> lock DP %s = %s", write.dp, write.value)
                 try:
                     lock.set_value(write.dp, write.value, nowait=True)
                     fut.set_result(None)
@@ -148,6 +150,7 @@ class TuyaGatewayTransport(Transport):
             # 2. read whatever the gateway pushes
             msg = gateway.receive()
             if msg is not None:
+                _LOGGER.debug("<- gateway %s", msg)
                 self._check(msg)
                 self._dispatch(msg, snapshot=False)
             # 3. keep the session alive
