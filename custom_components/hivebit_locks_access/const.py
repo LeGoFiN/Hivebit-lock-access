@@ -6,7 +6,7 @@ from typing import Final
 
 DOMAIN: Final = "hivebit_locks_access"
 #: Keep in step with manifest.json and the card's CARD_VERSION.
-VERSION: Final = "0.2.2"
+VERSION: Final = "0.2.3"
 
 CONF_PROFILE: Final = "profile"
 CONF_GATEWAY_ID: Final = "gateway_id"
