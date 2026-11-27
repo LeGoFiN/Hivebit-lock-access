@@ -18,6 +18,9 @@ from .conftest import UserFixture
 P = f"{DOMAIN}/"
 
 
+OPENED = base64.b64encode(bytes([0x00, 0x00, 0x01])).decode()  # DP 49 reply: opened
+
+
 def _raw(*b: int) -> str:
     return base64.b64encode(bytes(b)).decode()
 
@@ -91,6 +94,8 @@ async def test_lock_entity_unlock_roles(hass: HomeAssistant, entry, ws, users, f
 
     for who in ("father", "son", "tablet"):
         await unlock(users[who].id)
+        fake.report(49, OPENED)  # the lock's reply
+        await hass.async_block_till_done()
     assert [w.dp for w in fake.sent] == [49, 49, 49]
 
     for who in ("worker", "hivebit"):
@@ -339,3 +344,97 @@ async def test_lock_state_follows_door(hass: HomeAssistant, entry, ws, users, fa
     fake.report(47, "closed")
     await hass.async_block_till_done()
     assert hass.states.get("lock.front_door").state == "locked"
+
+
+async def _remote_unlock_setup(hass: HomeAssistant, ws, users, fake):
+    fake.report(47, "closed", snapshot=True)
+    await hass.async_block_till_done()
+    return await ws(users["father"])
+
+
+async def _unlock_entries(father) -> list[dict[str, Any]]:
+    timeline = (await father.call("timeline"))["result"]["entries"]
+    return [e for e in timeline if e["kind"].startswith("unlock")]
+
+
+async def test_remote_unlock_waits_for_the_lock(hass: HomeAssistant, entry, ws, users, fake) -> None:
+    """Sent is not open: the entity shows unlocking until the lock confirms,
+    and the relock timer starts from the confirmation."""
+    from datetime import timedelta
+
+    from homeassistant.util import dt as dt_util
+    from pytest_homeassistant_custom_component.common import async_fire_time_changed
+
+    father = await _remote_unlock_setup(hass, ws, users, fake)
+    res = await father.call("unlock")
+    assert res["success"], res
+    await hass.async_block_till_done()
+    assert hass.states.get("lock.front_door").state == "unlocking"
+    assert await _unlock_entries(father) == []  # nothing logged yet
+
+    # our own command echoed back by the gateway is not a reply
+    fake.report(49, fake.sent[-1].value)
+    await hass.async_block_till_done()
+    assert hass.states.get("lock.front_door").state == "unlocking"
+
+    # the lock is slow: 8 s later it opens. The old code had relocked by now.
+    async_fire_time_changed(hass, dt_util.utcnow() + timedelta(seconds=8))
+    await hass.async_block_till_done()
+    assert hass.states.get("lock.front_door").state == "unlocking"
+    fake.report(49, OPENED)
+    fake.report(22, True)  # a second confirmation DP for the same unlock
+    await hass.async_block_till_done()
+    assert hass.states.get("lock.front_door").state == "unlocked"
+    assert [e["text"] for e in await _unlock_entries(father)] == ["Unlocked remotely by Father"]
+
+    async_fire_time_changed(hass, dt_util.utcnow() + timedelta(seconds=14))
+    await hass.async_block_till_done()
+    assert hass.states.get("lock.front_door").state == "locked"
+
+
+async def test_remote_unlock_door_opens_before_reply(hass: HomeAssistant, entry, ws, users, fake) -> None:
+    father = await _remote_unlock_setup(hass, ws, users, fake)
+    assert (await father.call("unlock"))["success"]
+    fake.report(47, "open")
+    fake.report(49, OPENED)  # the reply arrives after the door opened
+    await hass.async_block_till_done()
+    assert hass.states.get("lock.front_door").state == "unlocked"
+    assert [e["text"] for e in await _unlock_entries(father)] == ["Unlocked remotely by Father"]
+
+
+async def test_remote_unlock_not_confirmed(hass: HomeAssistant, entry, ws, users, fake) -> None:
+    from datetime import timedelta
+
+    from homeassistant.util import dt as dt_util
+    from pytest_homeassistant_custom_component.common import async_fire_time_changed
+
+    father = await _remote_unlock_setup(hass, ws, users, fake)
+    assert (await father.call("unlock"))["success"]
+    async_fire_time_changed(hass, dt_util.utcnow() + timedelta(seconds=21))
+    await hass.async_block_till_done()
+    assert hass.states.get("lock.front_door").state == "locked"
+    assert [e["text"] for e in await _unlock_entries(father)] == [
+        "Remote unlock by Father was not confirmed by the lock"
+    ]
+
+
+async def test_remote_unlock_refused(hass: HomeAssistant, entry, ws, users, fake) -> None:
+    father = await _remote_unlock_setup(hass, ws, users, fake)
+    assert (await father.call("unlock"))["success"]
+    fake.report(49, base64.b64encode(bytes([0x01, 0x00, 0x01])).decode())
+    await hass.async_block_till_done()
+    assert hass.states.get("lock.front_door").state == "locked"
+    assert [e["text"] for e in await _unlock_entries(father)] == ["Remote unlock by Father refused by the lock"]
+
+
+async def test_remote_unlock_from_outside_is_urgent(hass: HomeAssistant, entry, ws, users, fake) -> None:
+    """T6: the door opened remotely but nobody asked from here."""
+    events = []
+    hass.bus.async_listen(EVENT_ACCESS, lambda e: events.append(e.data))
+    father = await _remote_unlock_setup(hass, ws, users, fake)
+    fake.report(49, OPENED)
+    await hass.async_block_till_done()
+    assert hass.states.get("lock.front_door").state == "unlocked"
+    entries = await _unlock_entries(father)
+    assert [e["text"] for e in entries] == ["Unlocked remotely from outside HIVEBIT (Tuya app or cloud)"]
+    assert events[-1]["alert"] == "urgent"

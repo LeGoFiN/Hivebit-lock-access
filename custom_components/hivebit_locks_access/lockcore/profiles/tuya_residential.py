@@ -318,6 +318,8 @@ class TuyaResidentialLockProfile(LockProfile):
             data = raw_bytes(value)
             if not data:
                 return [RawReport(dp, value)]
+            if len(data) > 3:
+                return []  # our own command echoed back, not the lock's reply
             return [RemoteUnlockResult(success=data[0] == 0x00)]
         if dp == self.DP_LOCK_STATE:
             if self.lock_state_from_door:

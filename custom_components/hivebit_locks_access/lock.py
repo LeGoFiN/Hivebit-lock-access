@@ -34,6 +34,11 @@ class AccessLock(AccessEntity, LockEntity):
     def is_locked(self) -> bool | None:
         return self.manager.locked
 
+    @property
+    def is_unlocking(self) -> bool:
+        # Sent, waiting for the lock to confirm it opened.
+        return bool(self.manager.state_dict().get("unlocking"))
+
     async def async_unlock(self, **kwargs: Any) -> None:
         # HA sets the service call's context on the entity before calling us,
         # so the caller's user ID is here. No user (automation, script,
