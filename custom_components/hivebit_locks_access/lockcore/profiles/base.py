@@ -105,6 +105,15 @@ class LockProfile(ABC):
     def encode_guest_code_delete(self, slot: int) -> DpWrite:
         """Return the write that deletes a guest code slot."""
 
+    def encode_guest_code_revoke(self, slot: int, now: int) -> list[DpWrite]:
+        """Writes that make a guest code stop working, in order. Override
+        when the lock's delete command is not reliable."""
+        return [self.encode_guest_code_delete(slot)]
+
+    #: Guest codes that start "now" are sent as starting this many seconds
+    #: earlier, so a lock clock running slightly behind still accepts them.
+    guest_start_slack_s: int = 0
+
     @abstractmethod
     def encode_enrol(self, method: Method, member_id: int) -> DpWrite:
         """Return the write that puts the lock into enrolment mode."""

@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import secrets
 import struct
 
 from ..events import (
@@ -225,6 +226,20 @@ class TuyaResidentialLockProfile(LockProfile):
         if not 0 <= slot <= 0xFFFF:
             raise ProfileError(f"slot out of range: {slot}")
         return DpWrite(self.DP_GUEST_CODE_DELETE, _b64(struct.pack(">HHH", slot, 1, 0)))
+
+    # Bench, 2026-11-17/20: DP 25 delete was never confirmed to work; writing
+    # the slot again with a window that ended a day ago and a throwaway PIN
+    # did. Send that first, then DP 25 as well.
+    def encode_guest_code_revoke(self, slot: int, now: int) -> list[DpWrite]:
+        expired_end = now - 86_400
+        throwaway = f"{secrets.randbelow(10**self.PIN_LENGTH):0{self.PIN_LENGTH}d}"
+        overwrite = self.encode_guest_code(
+            GuestCodeSpec(slot=slot, pin=throwaway, start=expired_end - 60, end=expired_end)
+        )
+        return [overwrite, self.encode_guest_code_delete(slot)]
+
+    # Same bench work: codes starting a day back are what proved reliable.
+    guest_start_slack_s = 86_400
 
     def _member(self, member_id: int) -> int:
         if not 1 <= member_id <= MAX_MEMBER_ID:
