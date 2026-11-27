@@ -27,7 +27,14 @@ const I18N = {
     recent: "Recent", see_all: "See all",
     owners: "Authorized persons", family: "Family", household: "Household",
     add_person: "Add person", wall_tablets: "Wall tablets",
-    tablets_hint: "HA accounts used by wall tablets. They can unlock, nothing else.",
+    tablets_hint: "Shared screens. They can unlock, nothing else.",
+    no_account: "Someone without an app account", no_account_hint: "Staff or visitors. Fingerprint, card or PIN only.",
+    admin: "Admin", no_accounts_left: "Every app account is already added.",
+    account_is_for: "This account is for",
+    for_person: "A person", for_person_hint: "Unlocks from the app are logged under this name.",
+    for_tablet: "A wall tablet", for_tablet_hint: "A shared screen. Can unlock, nothing else.",
+    tablet_added: "Wall tablet added",
+    copy_message: "Copy message", copy_manual: "Copy is blocked here. Long-press the message and copy it.",
     save: "Save", cancel: "Cancel", next: "Next", back: "Back", done: "Done", create: "Create",
     close: "Close", remove: "Remove", tap_confirm: "Tap again to confirm",
     remove_person: "Remove person", name: "Name", name_ph: "e.g. Ahmed, Driver, Nanny",
@@ -79,7 +86,14 @@ const I18N = {
     recent: "الأحدث", see_all: "عرض الكل",
     owners: "المخوَّلون", family: "العائلة", household: "أهل البيت",
     add_person: "إضافة شخص", wall_tablets: "الشاشات الجدارية",
-    tablets_hint: "حسابات الشاشات الجدارية. تستطيع الفتح فقط.",
+    tablets_hint: "شاشات مشتركة. تستطيع الفتح فقط.",
+    no_account: "شخص بدون حساب تطبيق", no_account_hint: "العاملون أو الزوار. بصمة أو بطاقة أو رمز فقط.",
+    admin: "مسؤول", no_accounts_left: "كل حسابات التطبيق مضافة.",
+    account_is_for: "هذا الحساب لـ",
+    for_person: "شخص", for_person_hint: "الفتح من التطبيق يُسجَّل باسمه.",
+    for_tablet: "شاشة جدارية", for_tablet_hint: "شاشة مشتركة. تستطيع الفتح فقط.",
+    tablet_added: "تمت إضافة الشاشة",
+    copy_message: "نسخ الرسالة", copy_manual: "النسخ غير متاح هنا. اضغط مطولاً على الرسالة وانسخها.",
     save: "حفظ", cancel: "إلغاء", next: "التالي", back: "رجوع", done: "تم", create: "إنشاء",
     close: "إغلاق", remove: "حذف", tap_confirm: "اضغط مرة أخرى للتأكيد",
     remove_person: "حذف الشخص", name: "الاسم", name_ph: "مثال: أحمد، السائق، المربية",
@@ -115,9 +129,6 @@ const I18N = {
       pin_length: "طول الرمز غير صحيح.", pin_not_numeric: "الرمز أرقام فقط.",
     },
     weekdays: ["الإثنين", "الثلاثاء", "الأربعاء", "الخميس", "الجمعة", "السبت", "الأحد"],
-    share_msg: (o) =>
-      `مرحباً ${o.name}، رمز باب ${o.lock} هو ${o.pin}. صالح من ${o.from} إلى ${o.to}.` +
-      (o.once ? " يُستخدم مرة واحدة." : "") + (o.schedule ? ` ${o.schedule}.` : ""),
   },
 };
 
@@ -383,13 +394,21 @@ class HivebitAccessCard extends HTMLElement {
         s.form = {};
         break;
       case "add-person":
-        if (!s.users) await this._run(() => this._loadUsers());
+        await this._run(() => this._loadUsers()); // fresh: accounts may have been added in HA
         s.modal = { type: "wizard", step: 1 };
-        s.form = { name: "", mode: "name_only", ha_user_id: "", owner: false, expires: "" };
+        s.form = { pick: null, use: "person", name: "", owner: false, expires: "" };
         break;
+      case "wiz-pick": {
+        const user = (s.users || []).find((u) => u.id === d.id);
+        s.form.pick = d.id;
+        s.form.name = user ? user.name || "" : "";
+        s.form.use = "person";
+        s.modal.step = 2;
+        break;
+      }
       case "wiz-next":
-        if (s.modal.step === 1 && !(s.form.name || "").trim()) return this._toast(t.name, true);
-        if (s.modal.step === 2 && s.form.mode === "link" && !s.form.ha_user_id) return this._toast(t.choose_account, true);
+        if (s.modal.step === 1 && !s.form.pick) return this._toast(t.choose_account, true);
+        if (s.modal.step === 2 && !(s.form.name || "").trim()) return this._toast(t.name, true);
         s.modal.step += 1;
         break;
       case "wiz-back":
@@ -397,11 +416,19 @@ class HivebitAccessCard extends HTMLElement {
         break;
       case "wiz-create": {
         const f = s.form;
+        const linked = f.pick && f.pick !== "none";
+        if (linked && f.use === "tablet") {
+          const ids = [...(s.users || []).filter((u) => u.tablet).map((u) => u.id), f.pick];
+          if (!(await this._run(() => this._ws("tablets/set", { user_ids: ids }), t.tablet_added))) return;
+          s.modal = null;
+          await this._run(() => this._loadUsers());
+          break;
+        }
         const r = await this._run(() =>
           this._ws("person/add", {
             name: f.name.trim(),
-            ha_user_id: f.mode === "link" ? f.ha_user_id : null,
-            owner: f.mode === "link" && !!f.owner,
+            ha_user_id: linked ? f.pick : null,
+            owner: linked && !!f.owner,
             expires_at: f.expires ? fromLocalInput(f.expires) : null,
           })
         );
@@ -472,9 +499,10 @@ class HivebitAccessCard extends HTMLElement {
         if (!this._confirmed("unknown-delete")) return;
         if (await this._run(() => this._ws("credential/remove", { credential_id: s.modal.cred_id }))) s.modal = null;
         break;
-      case "tablets-save": {
-        const ids = [...this.root.querySelectorAll("[data-tablet]:checked")].map((c) => c.dataset.tablet);
-        if (await this._run(() => this._ws("tablets/set", { user_ids: ids }), t.save)) await this._run(() => this._loadUsers());
+      case "tablet-remove": {
+        if (!this._confirmed("tablet-" + d.id)) return;
+        const ids = (s.users || []).filter((u) => u.tablet && u.id !== d.id).map((u) => u.id);
+        if (await this._run(() => this._ws("tablets/set", { user_ids: ids }))) await this._run(() => this._loadUsers());
         break;
       }
       case "new-code":
@@ -503,10 +531,15 @@ class HivebitAccessCard extends HTMLElement {
         break;
       }
       case "share":
-        await this._share(this._codeBySlot(Number(d.slot)) || s.modal?.code);
+        if (d.slot !== undefined) {
+          const code = this._codeBySlot(Number(d.slot));
+          if (code) s.modal = { type: "code-done", code };
+          break;
+        }
+        await this._share(s.modal?.code);
         return;
-      case "copy-pin":
-        await this._copy(d.pin);
+      case "copy-msg":
+        if (s.modal?.code) await this._copy(this._shareText(s.modal.code));
         return;
       case "revoke":
         if (!this._confirmed("revoke-" + d.slot)) return;
@@ -569,16 +602,16 @@ class HivebitAccessCard extends HTMLElement {
   }
 
   _shareText(code) {
-    const t = this.t;
-    const fmt = (ts) => this._fmt(ts);
+    // Always English, whatever language the card is in.
+    const t = I18N.en;
+    const fmt = (ts) =>
+      new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }).format(new Date(ts * 1000));
     const schedule =
       code.kind === "weekly"
         ? `${code.weekdays.map((i) => t.weekdays[i]).join(", ")} ${code.daily_from.map((n) => String(n).padStart(2, "0")).join(":")}–${code.daily_to.map((n) => String(n).padStart(2, "0")).join(":")}`
         : "";
     const o = { name: code.name, lock: this.s.lock?.name, pin: code.pin, from: fmt(code.start), to: fmt(code.end), once: code.kind === "one_time", schedule };
-    const en = I18N.en.share_msg(o);
-    const ar = I18N.ar.share_msg(o);
-    return this.s.lang === "ar" ? `${ar}\n\n${en}` : `${en}\n\n${ar}`;
+    return t.share_msg(o);
   }
 
   async _share(code) {
@@ -594,11 +627,38 @@ class HivebitAccessCard extends HTMLElement {
   }
 
   async _copy(text) {
-    try {
-      await navigator.clipboard.writeText(text);
+    let ok = false;
+    // The clipboard API only exists on https; the app and local http need the old way.
+    if (navigator.clipboard && window.isSecureContext) {
+      try {
+        await navigator.clipboard.writeText(text);
+        ok = true;
+      } catch (_e) { /* try the old way */ }
+    }
+    if (!ok) {
+      const ta = document.createElement("textarea");
+      ta.value = text;
+      ta.setAttribute("readonly", "");
+      ta.style.cssText = "position:fixed;top:0;left:0;width:1px;height:1px;opacity:0;";
+      document.body.appendChild(ta);
+      ta.focus();
+      ta.select();
+      ta.setSelectionRange(0, text.length);
+      try {
+        ok = document.execCommand("copy");
+      } catch (_e) { ok = false; }
+      ta.remove();
+    }
+    if (ok) {
       this._toast(this.t.copied);
-    } catch (_e) {
-      this._toast(text);
+      return;
+    }
+    // Last resort: leave the message selected so a long-press copies it.
+    this._toast(this.t.copy_manual, true);
+    const box = this.root.querySelector("textarea.msg");
+    if (box) {
+      box.focus();
+      box.select();
     }
   }
 
@@ -731,19 +791,20 @@ class HivebitAccessCard extends HTMLElement {
         )
         .join("")}</div>`;
     };
-    const tabletUsers = (s.users || []).filter((u) => !u.linked);
+    const tablets = (s.users || []).filter((u) => u.tablet);
     return `
       ${unknown.length ? `<div class="section-head warn"><span>${esc(t.who_is_this)}</span></div><div class="list">${unknown
         .map((c) => `<button class="row unknown" data-action="unknown" data-id="${c.id}"><ha-icon icon="${METHOD_ICON[c.method]}"></ha-icon><div class="grow">${esc(t.unknown_cred(this._wordFor(c.method), c.lock_ref))}</div><span class="pill">${esc(t.name_this)}</span></button>`)
         .join("")}</div>` : ""}
       <button class="primary wide" data-action="add-person"><ha-icon icon="mdi:account-plus-outline"></ha-icon>${esc(t.add_person)}</button>
       ${group("owner", t.owners)}${group("family", t.family)}${group("household", t.household)}
-      <div class="section-head"><span>${esc(t.wall_tablets)}</span></div>
-      <div class="panel">
+      ${tablets.length ? `
+        <div class="section-head"><span>${esc(t.wall_tablets)}</span></div>
         <div class="muted small">${esc(t.tablets_hint)}</div>
-        ${tabletUsers.map((u) => `<label class="check"><input type="checkbox" data-tablet="${u.id}" ${u.tablet ? "checked" : ""}/> ${esc(u.name)}</label>`).join("")}
-        <button class="secondary" data-action="tablets-save">${esc(t.save)}</button>
-      </div>`;
+        <div class="list">${tablets
+          .map((u) => `<div class="row"><ha-icon icon="mdi:tablet"></ha-icon><div class="grow name" style="text-align:start">${esc(u.name)}</div>
+            <button class="ghost sm" data-action="tablet-remove" data-id="${u.id}">${esc(s.confirm === "tablet-" + u.id ? t.tap_confirm : t.remove)}</button></div>`)
+          .join("")}</div>` : ""}`;
   }
 
   _codesTab() {
@@ -819,31 +880,55 @@ class HivebitAccessCard extends HTMLElement {
     const t = this.t;
     const f = this.s.form;
     const step = this.s.modal.step;
-    const dots = [1, 2, 3].map((n) => `<i class="${n <= step ? "on" : ""}"></i>`).join("");
+    const linked = f.pick && f.pick !== "none";
+    const tablet = linked && f.use === "tablet";
+    const last = tablet ? 2 : 3;
+    const dots = Array.from({ length: last }, (_, n) => `<i class="${n + 1 <= step ? "on" : ""}"></i>`).join("");
     let body = "";
     if (step === 1) {
-      body = `<label class="field"><span>${esc(t.name)}</span><input data-field="name" value="${esc(f.name)}" placeholder="${esc(t.name_ph)}" maxlength="40" autofocus/></label>`;
-    } else if (step === 2) {
+      // daily accounts first; admin accounts (HIVEBIT, the owner's admin login) last
+      const accounts = (this.s.users || []).filter((u) => !u.linked && !u.tablet).sort((a, b) => !!a.is_admin - !!b.is_admin);
       body = `
-        <label class="option ${f.mode === "name_only" ? "on" : ""}"><input type="radio" name="mode" value="name_only" data-field="mode" data-rerender ${f.mode === "name_only" ? "checked" : ""}/>
-          <div><div class="name">${esc(t.name_only)}</div><div class="muted small">${esc(t.name_only_hint)}</div></div></label>
-        <label class="option ${f.mode === "link" ? "on" : ""}"><input type="radio" name="mode" value="link" data-field="mode" data-rerender ${f.mode === "link" ? "checked" : ""}/>
-          <div><div class="name">${esc(t.link_account)}</div><div class="muted small">${esc(t.link_hint)}</div></div></label>
-        ${f.mode === "link" ? `
-          <label class="field"><span>${esc(t.account)}</span><select data-field="ha_user_id">${this._userOptions(f.ha_user_id)}</select></label>
+        <div class="muted small">${esc(t.who_is_this)}</div>
+        ${accounts
+          .map(
+            (u) => `<button class="option ${f.pick === u.id ? "on" : ""}" data-action="wiz-pick" data-id="${u.id}">
+              <div class="avatar">${esc((u.name || "?").slice(0, 1).toUpperCase())}</div>
+              <div class="grow"><div class="name">${esc(u.name || "")} ${u.is_admin ? `<span class="badge dim">${esc(t.admin)}</span>` : ""}</div>
+              <div class="muted small">${esc(t.account)}</div></div></button>`
+          )
+          .join("") || `<div class="muted small">${esc(t.no_accounts_left)}</div>`}
+        <button class="option ${f.pick === "none" ? "on" : ""}" data-action="wiz-pick" data-id="none">
+          <div class="avatar"><ha-icon icon="mdi:fingerprint"></ha-icon></div>
+          <div class="grow"><div class="name">${esc(t.no_account)}</div><div class="muted small">${esc(t.no_account_hint)}</div></div></button>`;
+    } else if (step === 2) {
+      const nameField = `<label class="field"><span>${esc(t.name)}</span><input data-field="name" value="${esc(f.name)}" placeholder="${esc(t.name_ph)}" maxlength="40"/></label>`;
+      body = !linked
+        ? nameField
+        : `
+        <div class="muted small">${esc(t.account_is_for)}</div>
+        <label class="option ${f.use === "person" ? "on" : ""}"><input type="radio" name="use" value="person" data-field="use" data-rerender ${f.use === "person" ? "checked" : ""}/>
+          <div><div class="name">${esc(t.for_person)}</div><div class="muted small">${esc(t.for_person_hint)}</div></div></label>
+        <label class="option ${f.use === "tablet" ? "on" : ""}"><input type="radio" name="use" value="tablet" data-field="use" data-rerender ${f.use === "tablet" ? "checked" : ""}/>
+          <div><div class="name">${esc(t.for_tablet)}</div><div class="muted small">${esc(t.for_tablet_hint)}</div></div></label>
+        ${f.use === "person" ? `${nameField}
           <label class="check"><input type="checkbox" data-field="owner" ${f.owner ? "checked" : ""}/> ${esc(t.owner_toggle)}</label>` : ""}`;
     } else {
       body = `
         <button class="option ${!f.expires ? "on" : ""}" data-action="no-expiry"><input type="radio" tabindex="-1" ${!f.expires ? "checked" : ""}/><div class="name">${esc(t.no_expiry)}</div></button>
         <label class="field"><span>${esc(t.until)}</span><input type="datetime-local" data-field="expires" data-rerender value="${esc(f.expires)}"/></label>`;
     }
+    const next =
+      step === 1 ? "" : step < last
+        ? `<button class="primary" data-action="wiz-next">${esc(t.next)}</button>`
+        : `<button class="primary" data-action="wiz-create">${esc(t.create)}</button>`;
     return `
       <div class="sheet-head"><div class="title">${esc(t.add_person)}</div><div class="dots">${dots}</div><button class="link" data-action="close">${esc(t.cancel)}</button></div>
       ${step === 3 ? `<div class="muted">${esc(t.expiry)}</div>` : ""}
       <div class="sheet-body">${body}</div>
       <div class="sheet-foot">
         ${step > 1 ? `<button class="secondary" data-action="wiz-back">${esc(t.back)}</button>` : "<span></span>"}
-        ${step < 3 ? `<button class="primary" data-action="wiz-next">${esc(t.next)}</button>` : `<button class="primary" data-action="wiz-create">${esc(t.create)}</button>`}
+        ${next}
       </div>`;
   }
 
@@ -976,9 +1061,10 @@ class HivebitAccessCard extends HTMLElement {
         <div class="muted">${esc(c.name)}</div>
         <div class="pin" dir="ltr">${esc(c.pin.slice(0, 3))} ${esc(c.pin.slice(3))}</div>
         <div class="muted small">${esc(this._fmt(c.start))} – ${esc(this._fmt(c.end))}</div>
+        <textarea class="msg" dir="ltr" readonly rows="3">${esc(this._shareText(c))}</textarea>
       </div>
       <div class="sheet-foot">
-        <button class="secondary" data-action="copy-pin" data-pin="${esc(c.pin)}">${esc(t.copy)}</button>
+        <button class="secondary" data-action="copy-msg">${esc(t.copy_message)}</button>
         <button class="primary" data-action="share"><ha-icon icon="mdi:share-variant-outline"></ha-icon>${esc(t.share)}</button>
       </div>`;
   }
@@ -1063,6 +1149,8 @@ const STYLE = `
   input[type=checkbox], input[type=radio] { width:18px; height:18px; accent-color: var(--gold); padding:0; }
   .option { display:flex; gap:12px; align-items:flex-start; padding: 12px; border:1px solid var(--line); border-radius: 12px; }
   .option.on { border-color: var(--gold2); background: var(--surf); }
+  button.option { width:100%; text-align:start; align-items:center; background:none; color:inherit; font:inherit; cursor:pointer; }
+  textarea.msg { width:100%; box-sizing:border-box; resize:none; padding:10px 12px; border-radius:12px; border:1px solid var(--line); background: var(--surf); color: var(--txt); font: inherit; font-size:14px; user-select:text; -webkit-user-select:text; }
   .seg { display:flex; gap:4px; background: var(--surf); padding:4px; border-radius: 11px; }
   .seg button { flex:1; padding: 8px 4px; border-radius: 8px; color: var(--txt2); font-size: 13.5px; }
   .seg button.on { background: var(--surf2); color: var(--gold); font-weight: 600; }

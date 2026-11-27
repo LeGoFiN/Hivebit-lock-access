@@ -37,10 +37,9 @@ async def main() -> None:
         await shot("02_owner_people", steps=[click('[data-tab="people"]')])
         await shot("03_owner_codes", steps=[click('[data-tab="codes"]')])
         await shot("04_owner_timeline", steps=[click('[data-tab="timeline"]')])
-        await shot("05_wizard_step2", steps=[
-            click('[data-tab="people"]'), click('[data-action="add-person"]'),
-            "const c=document.getElementById('card'); c.s.form.name='Ahmed'; c.s.form.mode='link'; c._render()",
-            click('[data-action="wiz-next"]'),
+        await shot("05_wizard_pick", steps=[click('[data-tab="people"]'), click('[data-action="add-person"]')])
+        await shot("05b_wizard_account", steps=[
+            click('[data-tab="people"]'), click('[data-action="add-person"]'), click('[data-action="wiz-pick"][data-id="u3"]'),
         ])
         await shot("06_person_detail", steps=[click('[data-tab="people"]'), click('[data-action="person"][data-id="p3"]')])
         await shot("07_enrol_progress", steps=[
