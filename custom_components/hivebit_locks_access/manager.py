@@ -70,6 +70,11 @@ ALARM_TEXT = {
 }
 URGENT_ALARMS = {"pry", "shock", "defense"}
 
+# Remote unlock: the request is pending until the lock confirms it.
+UNLOCK_CONFIRM_TIMEOUT_S = 20  # Zigbee via the gateway can take several seconds
+UNLOCK_LATE_WINDOW_S = 60  # a late confirmation still belongs to the request
+UNLOCK_DEDUPE_S = 10  # one unlock can be confirmed on more than one DP
+
 METHOD_WORD = {
     Method.FINGERPRINT: "fingerprint",
     Method.CARD: "card",
@@ -141,6 +146,9 @@ class AccessManager:
         self._person_timers: dict[str, CALLBACK_TYPE] = {}
         self._session_timer: CALLBACK_TYPE | None = None
         self._relock_timer: CALLBACK_TYPE | None = None
+        self._pending_unlock: dict[str, Any] | None = None
+        self._pending_unlock_timer: CALLBACK_TYPE | None = None
+        self._last_unlock_confirmed = 0.0
         self._handle_lock = asyncio.Lock()
         self._was_available = False
         self._stopping = False
@@ -175,6 +183,7 @@ class AccessManager:
             self._session_timer()
             self._session_timer = None
         self._cancel_relock()
+        self._cancel_pending_unlock_timer()
         await self.transport.async_stop()
 
     @property
@@ -246,6 +255,10 @@ class AccessManager:
             if self.profile.lock_state_from_door:
                 self._cancel_relock()
                 self.locked = not report.is_open
+            if not snapshot and report.is_open and self._unlock_pending:
+                # The door opened while we waited: the remote unlock worked
+                # even if its confirmation DP has not arrived yet.
+                await self._remote_unlock_confirmed()
             if not snapshot and previous is not None and previous != report.is_open:
                 await self._record("door", {"open": report.is_open})
             self._notify("state", self.state_dict())
@@ -268,9 +281,9 @@ class AccessManager:
             await self._record("alarm", {"alarm": report.kind}, alert=alert)
         elif isinstance(report, RemoteUnlockResult):
             if report.success:
-                self._mark_unlocked()
+                await self._remote_unlock_confirmed()
             else:
-                await self._record("unlock_failed", {}, alert="normal")
+                await self._remote_unlock_failed()
         elif isinstance(report, EnrolReport):
             await self._enrol_report(report)
         elif isinstance(report, DeleteReport):
@@ -290,26 +303,117 @@ class AccessManager:
 
     # Unlock ------------------------------------------------------------
 
+    @property
+    def _unlock_pending(self) -> bool:
+        return self._pending_unlock is not None and self._pending_unlock_timer is not None
+
     async def async_unlock(self, user_id: str | None) -> None:
+        """Ask the lock to open. Nothing is shown as unlocked, and nothing
+        is logged as an entry, until the lock confirms it opened."""
         caller = self.policy.require_unlock(user_id)
         if not self.profile.capabilities.remote_unlock or len(self._unlock_key) != 8:
             raise AccessError("Remote unlock is not set up for this lock.")
-        await self._send(
-            lambda: self.profile.encode_remote_unlock(self._unlock_key_id, self._unlock_key)
-        )
         method = Method.TABLET if caller is Caller.TABLET else Method.APP
         person = self.policy.person_for(user_id)
-        self._mark_unlocked()
-        async with self._handle_lock:
-            await self._record(
-                "unlock",
-                {
-                    "method": method,
-                    "actor_user_id": user_id,
-                    "actor_name": await self._user_name(user_id),
-                },
-                person_id=person.id if person else None,
+        pending = {
+            "method": method,
+            "actor_user_id": user_id,
+            "actor_name": await self._user_name(user_id),
+            "person_id": person.id if person else None,
+            "sent_at": time.time(),
+        }
+        # Set before sending: the lock's reply can arrive before the send returns.
+        self._pending_unlock = pending
+        self._arm_pending_unlock_timer()
+        self._notify("state", self.state_dict())
+        try:
+            await self._send(
+                lambda: self.profile.encode_remote_unlock(self._unlock_key_id, self._unlock_key)
             )
+        except AccessError:
+            if self._pending_unlock is pending:
+                self._pending_unlock = None
+                self._cancel_pending_unlock_timer()
+                self._notify("state", self.state_dict())
+            raise
+
+    def _arm_pending_unlock_timer(self) -> None:
+        self._cancel_pending_unlock_timer()
+
+        @callback
+        def _timeout(_now: Any) -> None:
+            self._pending_unlock_timer = None
+            self.hass.async_create_task(self._remote_unlock_timed_out())
+
+        self._pending_unlock_timer = async_track_point_in_utc_time(
+            self.hass, _timeout, dt_util.utcnow() + timedelta(seconds=UNLOCK_CONFIRM_TIMEOUT_S)
+        )
+
+    def _cancel_pending_unlock_timer(self) -> None:
+        if self._pending_unlock_timer:
+            self._pending_unlock_timer()
+            self._pending_unlock_timer = None
+
+    def _take_pending_unlock(self) -> dict[str, Any] | None:
+        """The request a confirmation belongs to: the open one, or one that
+        timed out less than a minute ago (a late reply)."""
+        pending = self._pending_unlock
+        self._pending_unlock = None
+        self._cancel_pending_unlock_timer()
+        if pending and time.time() - pending["sent_at"] <= UNLOCK_LATE_WINDOW_S:
+            return pending
+        return None
+
+    async def _remote_unlock_confirmed(self) -> None:
+        now = time.time()
+        pending = self._take_pending_unlock()
+        if pending is None and now - self._last_unlock_confirmed < UNLOCK_DEDUPE_S:
+            return  # second confirmation DP for the same unlock
+        self._last_unlock_confirmed = now
+        self._mark_unlocked()
+        if pending is None:
+            # Nobody asked from here: the Tuya app, the cloud or another
+            # integration opened the door.
+            await self._record("unlock", {"method": Method.APP, "outside": True}, alert="urgent")
+            return
+        await self._record(
+            "unlock",
+            {
+                "method": pending["method"],
+                "actor_user_id": pending["actor_user_id"],
+                "actor_name": pending["actor_name"],
+                "late": now - pending["sent_at"] > UNLOCK_CONFIRM_TIMEOUT_S,
+            },
+            person_id=pending["person_id"],
+        )
+
+    async def _remote_unlock_failed(self) -> None:
+        pending = self._take_pending_unlock()
+        if pending is None:
+            return
+        await self._record(
+            "unlock_failed",
+            {"actor_user_id": pending["actor_user_id"], "actor_name": pending["actor_name"]},
+            alert="normal",
+            person_id=pending["person_id"],
+        )
+        self._notify("state", self.state_dict())
+
+    async def _remote_unlock_timed_out(self) -> None:
+        if self._stopping:
+            return
+        async with self._handle_lock:
+            pending = self._pending_unlock
+            if pending is None:
+                return
+            # Keep the request for a late reply, but stop showing "unlocking".
+            await self._record(
+                "unlock_unconfirmed",
+                {"actor_user_id": pending["actor_user_id"], "actor_name": pending["actor_name"]},
+                alert="normal",
+                person_id=pending["person_id"],
+            )
+            self._notify("state", self.state_dict())
 
     @callback
     def _mark_unlocked(self) -> None:
@@ -1012,7 +1116,9 @@ class AccessManager:
         unknown = False
         if kind == "unlock":
             method = data.get("method")
-            if method in (Method.APP, Method.TABLET):
+            if data.get("outside"):
+                text = "Unlocked remotely from outside HIVEBIT (Tuya app or cloud)"
+            elif method in (Method.APP, Method.TABLET):
                 who = person.name if person else data.get("actor_name", "someone")
                 text = f"Unlocked from the wall tablet ({who})" if method == Method.TABLET else f"Unlocked remotely by {who}"
             elif method == Method.GUEST_CODE:
@@ -1047,7 +1153,11 @@ class AccessManager:
         elif kind == "delete_failed":
             text = f"The lock refused a deletion ({data.get('reason')})"
         elif kind == "unlock_failed":
-            text = "Remote unlock failed"
+            who = person.name if person else data.get("actor_name")
+            text = f"Remote unlock by {who} refused by the lock" if who else "Remote unlock failed"
+        elif kind == "unlock_unconfirmed":
+            who = person.name if person else data.get("actor_name", "someone")
+            text = f"Remote unlock by {who} was not confirmed by the lock"
         elif kind == "offline":
             text = "Lock offline"
         elif kind == "online":
@@ -1075,6 +1185,7 @@ class AccessManager:
             "available": self.available,
             "door_open": self.door_open,
             "locked": self.locked,
+            "unlocking": self._unlock_pending,
             "battery": self.battery,
         }
 

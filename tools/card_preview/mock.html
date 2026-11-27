@@ -51,7 +51,7 @@
   ];
   const users = [
     { id: "u1", name: "Abdullah", linked: true, tablet: false }, { id: "u2", name: "Sara", linked: true, tablet: false },
-    { id: "u3", name: "Omar", linked: false, tablet: false }, { id: "u5", name: "Hallway tablet", linked: false, tablet: true },
+    { id: "u3", name: "Omar", linked: false, tablet: false }, { id: "u4", name: "HIVEBIT", is_admin: true, linked: false, tablet: false }, { id: "u5", name: "Hallway tablet", linked: false, tablet: true },
   ];
   const lock = { entry_id: "e1", name: "Front door", available: true, door_open: false, locked: true, battery: 92, role: ROLE,
     capabilities: { enrol_methods: ["card", "fingerprint", "pin"], remote_unlock: true, guest_codes: true } };
@@ -66,6 +66,8 @@
         case "timeline": return { entries: timeline };
         case "ha_users": return { users };
         case "unlock": return { ok: true };
+        case "tablets/set": users.forEach((u) => (u.tablet = m.user_ids.includes(u.id))); return {};
+        case "person/add": return { person_id: "p9" };
         case "enrol/start": return { session: { person_id: m.person_id, method: m.method, state: "waiting", presses_needed: 0, presses_done: 0 } };
         case "guest_code/create": return { slot: 903, name: m.name, pin: "519027", kind: m.kind, start: now, end: m.end || now + 86400, weekdays: m.weekdays || [] };
         default: return { ok: true };
