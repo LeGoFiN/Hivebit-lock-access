@@ -11,7 +11,7 @@
  *   view: tablet            # optional: big unlock button only
  */
 
-const CARD_VERSION = "0.2.1";
+const CARD_VERSION = "0.2.2";
 const NS = "hivebit_locks_access/";
 
 const I18N = {
