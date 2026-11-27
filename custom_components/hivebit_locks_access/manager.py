@@ -399,8 +399,8 @@ class AccessManager:
             code.used_at = time.time()
             self._cancel_guest_timer(slot)
             await self.store.async_save()
-            try:  # the lock already refuses it; deleting frees the slot cleanly
-                await self._send(lambda: self.profile.encode_guest_code_delete(slot))
+            try:  # the lock already refuses it; this frees the slot cleanly
+                await self._revoke_on_lock(slot)
             except AccessError:
                 pass
             self._notify("guest_codes", self.guest_codes_dict())
@@ -881,8 +881,9 @@ class AccessManager:
         spec = GuestCodeSpec(
             slot=slot,
             pin=pin,
-            # Lock clocks can lag; never start later than now.
-            start=int(min(start, now)) if kind is not GuestKind.WINDOW else int(start),
+            # A code that starts now is sent as starting a little earlier:
+            # a lock clock even a minute behind would refuse it at first.
+            start=int(now) - self.profile.guest_start_slack_s if start <= now + 60 else int(start),
             end=int(end),
             one_time=kind is GuestKind.ONE_TIME,
             weekdays=frozenset(weekdays) if kind is GuestKind.WEEKLY else frozenset(),
@@ -915,12 +916,20 @@ class AccessManager:
         code = self.store.guest_codes.get(slot)
         if code is None or code.state is not GuestState.ACTIVE:
             raise AccessError("That guest code is not active.")
-        await self._send(lambda: self.profile.encode_guest_code_delete(slot))
+        await self._revoke_on_lock(slot)
         code.state = GuestState.REVOKED
         self._cancel_guest_timer(slot)
         await self.store.async_save()
         await self._admin(actor, "guest_code_revoked", f"{actor.name} revoked the guest code for {code.name}", None)
         self._notify("guest_codes", self.guest_codes_dict())
+
+    async def _revoke_on_lock(self, slot: int) -> None:
+        try:
+            writes = self.profile.encode_guest_code_revoke(slot, int(time.time()))
+        except ProfileError as err:
+            raise AccessError(str(err)) from err
+        for write in writes:
+            await self._send(lambda w=write: w)
 
     def _new_pin(self, length: int) -> str:
         taken = {g.pin for g in self.store.active_guest_codes()}
@@ -957,7 +966,7 @@ class AccessManager:
         # The lock enforces the end time itself; deleting is a backup in case
         # its clock is wrong.
         try:
-            await self._send(lambda: self.profile.encode_guest_code_delete(slot))
+            await self._revoke_on_lock(slot)
         except AccessError:
             pass
         await self._record("guest_expired", {"slot": slot, "guest": code.name})

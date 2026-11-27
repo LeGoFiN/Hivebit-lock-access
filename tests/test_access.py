@@ -203,9 +203,20 @@ async def test_guest_code_one_time_flow(hass: HomeAssistant, entry, ws, users, f
     raw = base64.b64decode(fake.sent[-1].value)
     assert fake.sent[-1].dp == 24 and raw[20] == 1 and raw[21:].decode() == code["pin"]
 
+    import struct
+    import time
+
+    lock_start = struct.unpack(">I", raw[6:10])[0]
+    assert time.time() - 86_400 - 5 < lock_start <= time.time() - 86_400  # slack for a slow lock clock
+
     fake.report(3, 901)
     await hass.async_block_till_done()
-    assert fake.sent[-1].dp == 25  # slot freed after use
+    # slot cleared after use: expired overwrite (the proven way), then DP 25
+    assert [w.dp for w in fake.sent[-2:]] == [24, 25]
+    cleared = base64.b64decode(fake.sent[-2].value)
+    assert struct.unpack(">H", cleared[:2])[0] == 901
+    assert struct.unpack(">I", cleared[10:14])[0] < time.time() - 86_000
+    assert cleared[21:].decode() != code["pin"]
     timeline = (await father.call("timeline"))["result"]["entries"]
     assert any(e["text"] == "Guest 'Plumber' used code" for e in timeline)
     assert (await father.call("guest_codes"))["result"]["guest_codes"] == []
@@ -224,7 +235,7 @@ async def test_guest_code_weekly_and_revoke(hass: HomeAssistant, entry, ws, user
     assert raw[14:20] == bytes([2, 0b1001, 9, 0, 12, 0])
     res = await father.call("guest_code/revoke", slot=res["result"]["slot"])
     assert res["success"]
-    assert fake.sent[-1].dp == 25
+    assert [w.dp for w in fake.sent[-2:]] == [24, 25]
 
 
 async def test_last_owner_cannot_be_removed(hass: HomeAssistant, entry, ws, users) -> None:
