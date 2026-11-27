@@ -11,7 +11,7 @@
  *   view: tablet            # optional: big unlock button only
  */
 
-const CARD_VERSION = "0.2.0";
+const CARD_VERSION = "0.2.1";
 const NS = "hivebit_locks_access/";
 
 const I18N = {
@@ -22,7 +22,7 @@ const I18N = {
     locked: "Locked", unlocked: "Unlocked", unknown_state: "Unknown",
     door_open: "Door open", door_closed: "Door closed", offline: "Lock offline",
     battery: "Battery", hold_to_unlock: "Hold to unlock", tap_to_unlock: "Unlock",
-    unlocking: "Unlocking…", unlock_sent: "Unlocked",
+    unlocking: "Unlocking…", unlock_sent: "Unlock sent, waiting for the lock",
     need_name: (n) => `${n} credential${n === 1 ? "" : "s"} need${n === 1 ? "s" : ""} a name`,
     recent: "Recent", see_all: "See all",
     owners: "Authorized persons", family: "Family", household: "Household",
@@ -74,7 +74,7 @@ const I18N = {
     locked: "مقفل", unlocked: "مفتوح", unknown_state: "غير معروف",
     door_open: "الباب مفتوح", door_closed: "الباب مغلق", offline: "القفل غير متصل",
     battery: "البطارية", hold_to_unlock: "اضغط مطولاً للفتح", tap_to_unlock: "فتح",
-    unlocking: "جارٍ الفتح…", unlock_sent: "تم الفتح",
+    unlocking: "جارٍ الفتح…", unlock_sent: "أُرسل أمر الفتح، بانتظار القفل",
     need_name: (n) => `${n} بحاجة إلى اسم`,
     recent: "الأحدث", see_all: "عرض الكل",
     owners: "المخوَّلون", family: "العائلة", household: "أهل البيت",
@@ -645,8 +645,8 @@ class HivebitAccessCard extends HTMLElement {
   _status() {
     const lock = this.s.lock || {};
     const t = this.t;
-    const state = !lock.available ? "offline" : lock.locked === true ? "locked" : lock.locked === false ? "unlocked" : "unknown";
-    const label = state === "offline" ? t.offline : state === "locked" ? t.locked : state === "unlocked" ? t.unlocked : t.unknown_state;
+    const state = !lock.available ? "offline" : lock.locked === false ? "unlocked" : lock.unlocking ? "unlocking" : lock.locked === true ? "locked" : "unknown";
+    const label = { offline: t.offline, locked: t.locked, unlocked: t.unlocked, unlocking: t.unlocking }[state] || t.unknown_state;
     const door = lock.door_open === true ? t.door_open : lock.door_open === false ? t.door_closed : "";
     const icon = state === "unlocked" ? "mdi:lock-open-variant-outline" : state === "offline" ? "mdi:lock-alert-outline" : "mdi:lock-outline";
     return { state, label, door, icon };
@@ -665,8 +665,8 @@ class HivebitAccessCard extends HTMLElement {
         <div class="state">${esc(st.label)}</div>
         <div class="muted">${esc(st.door)}</div>
       </div>
-      <button class="unlock ${s.unlocking ? "busy" : ""}" data-hold="unlock" ${s.lock?.available ? "" : "disabled"}>
-        <span class="fill"></span><span class="lbl">${esc(s.unlocking ? t.unlocking : t.hold_to_unlock)}</span>
+      <button class="unlock ${s.unlocking || s.lock?.unlocking ? "busy" : ""}" data-hold="unlock" ${s.lock?.available ? "" : "disabled"}>
+        <span class="fill"></span><span class="lbl">${esc(s.unlocking || s.lock?.unlocking ? t.unlocking : t.hold_to_unlock)}</span>
       </button>
       ${owner ? `
         <div class="section-head"><span>${esc(t.recent)}</span><button class="link" data-action="tab" data-tab="timeline">${esc(t.see_all)}</button></div>
@@ -683,8 +683,8 @@ class HivebitAccessCard extends HTMLElement {
         <div class="state">${esc(st.label)}</div>
         <div class="muted">${esc(st.door)}</div>
       </div>
-      <button class="unlock big ${s.unlocking ? "busy" : ""}" data-action="unlock" ${s.lock?.available ? "" : "disabled"}>
-        <span class="lbl">${esc(s.unlocking ? t.unlocking : t.tap_to_unlock)}</span>
+      <button class="unlock big ${s.unlocking || s.lock?.unlocking ? "busy" : ""}" data-action="unlock" ${s.lock?.available ? "" : "disabled"}>
+        <span class="lbl">${esc(s.unlocking || s.lock?.unlocking ? t.unlocking : t.tap_to_unlock)}</span>
       </button>`;
   }
 
@@ -1009,6 +1009,9 @@ const STYLE = `
   .ring { width:96px; height:96px; border-radius:50%; display:flex; align-items:center; justify-content:center; border:2px solid var(--gold2); color: var(--gold); }
   .ring ha-icon { --mdc-icon-size: 44px; }
   .status.unlocked .ring { border-color: var(--accent); color: var(--accent); box-shadow: 0 0 0 6px rgba(255,165,0,.10); }
+  .status.unlocking .ring { border-color: var(--accent); color: var(--accent); animation: hb-pulse 1.2s ease-in-out infinite; }
+  .status.unlocking .state { color: var(--accent); }
+  @keyframes hb-pulse { 50% { box-shadow: 0 0 0 10px rgba(255,165,0,.12); } }
   .status.offline .ring, .status.unknown .ring { border-color: #555; color: #777; }
   .state { font-size: 22px; font-weight: 600; color: var(--gold); }
   .status.unlocked .state { color: var(--accent); }
